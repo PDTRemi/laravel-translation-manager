@@ -1,23 +1,18 @@
 <?php namespace Barryvdh\TranslationManager;
-
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Events\Dispatcher;
 use Barryvdh\TranslationManager\Models\Translation;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\DB;
 use Symfony\Component\Finder\Finder;
-
 class Manager{
-
     /** @var \Illuminate\Foundation\Application  */
     protected $app;
     /** @var \Illuminate\Filesystem\Filesystem  */
     protected $files;
     /** @var \Illuminate\Events\Dispatcher  */
     protected $events;
-
     protected $config;
-
     public function __construct(Application $app, Filesystem $files, Dispatcher $events)
     {
         $this->app = $app;
@@ -25,7 +20,6 @@ class Manager{
         $this->events = $events;
         $this->config = $app['config']['translation-manager'];
     }
-
     public function missingKey($namespace, $group, $key)
     {
         if(!in_array($group, $this->config['exclude_groups'])) {
@@ -36,27 +30,20 @@ class Manager{
             ));
         }
     }
-
     public function importTranslations($replace = false)
     {
         $counter = 0;
         foreach($this->files->directories($this->app->langPath()) as $langPath){
             $locale = basename($langPath);
-
             foreach($this->files->allfiles($langPath) as $file) {
-
                 $info = pathinfo($file);
                 $group = $info['filename'];
-
                 if(in_array($group, $this->config['exclude_groups'])) {
                     continue;
                 }
-
-                $subLangPath = str_replace($langPath . "\\", "", $info['dirname']);
-                if ($subLangPath != $langPath) {
-                    $group = $subLangPath . "/" . $group;
+                if ($langPath != $info['dirname']) {
+                    $group = basename($info['dirname']).'/'.$info['filename'];
                 }
-
                 $translations = \Lang::getLoader()->load($locale, $group);
                 if ($translations && is_array($translations)) {
                     foreach(array_dot($translations) as $key => $value){
@@ -70,20 +57,16 @@ class Manager{
                             'group' => $group,
                             'key' => $key,
                         ));
-
                         // Check if the database is different then the files
                         $newStatus = $translation->value === $value ? Translation::STATUS_SAVED : Translation::STATUS_CHANGED;
                         if($newStatus !== (int) $translation->status){
                             $translation->status = $newStatus;
                         }
-
                         // Only replace when empty, or explicitly told so
                         if($replace || !$translation->value){
                             $translation->value = $value;
                         }
-
                         $translation->save();
-
                         $counter++;
                     }
                 }
@@ -91,7 +74,6 @@ class Manager{
         }
         return $counter;
     }
-
     public function findTranslations($path = null)
     {
         $path = $path ?: base_path();
@@ -108,11 +90,9 @@ class Manager{
             ")".                                // Close group
             "[\'\"]".                           // Closing quote
             "[\),]";                            // Close parentheses or new parameter
-
         // Find all PHP + Twig files in the app folder, except for storage
         $finder = new Finder();
         $finder->in($path)->exclude('storage')->name('*.php')->name('*.twig')->files();
-
         /** @var \Symfony\Component\Finder\SplFileInfo $file */
         foreach ($finder as $file) {
             // Search the current file for the pattern
@@ -125,26 +105,21 @@ class Manager{
         }
         // Remove duplicates
         $keys = array_unique($keys);
-
         // Add the translations to the database, if not existing.
         foreach($keys as $key){
             // Split the group and item
             list($group, $item) = explode('.', $key, 2);
             $this->missingKey('', $group, $item);
         }
-
         // Return the number of found translations
         return count($keys);
     }
-
     public function exportTranslations($group)
     {
         if(!in_array($group, $this->config['exclude_groups'])) {
             if($group == '*')
                 return $this->exportAllTranslations();
-
             $tree = $this->makeTree(Translation::where('group', $group)->whereNotNull('value')->get());
-
             foreach($tree as $locale => $groups){
                 if(isset($groups[$group])){
                     $translations = $groups[$group];
@@ -154,28 +129,27 @@ class Manager{
                 }
             }
             Translation::where('group', $group)->whereNotNull('value')->update(array('status' => Translation::STATUS_SAVED));
+            if(Translation::where('group', $group)->get()->isEmpty())
+            {
+                $this->deleteLangFile($group);
+            }
         }
     }
-
     public function exportAllTranslations()
     {
         $groups = Translation::whereNotNull('value')->select(DB::raw('DISTINCT `group`'))->get('group');
-
         foreach($groups as $group){
             $this->exportTranslations($group->group);
         }
     }
-
     public function cleanTranslations()
     {
         Translation::whereNull('value')->delete();
     }
-
     public function truncateTranslations()
     {
         Translation::truncate();
     }
-
     protected function makeTree($translations)
     {
         $array = array();
@@ -184,7 +158,6 @@ class Manager{
         }
         return $array;
     }
-
     public function getConfig($key = null)
     {
         if($key == null) {
@@ -194,5 +167,11 @@ class Manager{
             return $this->config[$key];
         }
     }
-
+    public function deleteLangFile($group)
+    {
+        foreach($this->files->directories($this->app->langPath()) as $langPath){
+            $path = "$langPath/$group.php";
+            $this->files->delete($path);
+        }
+    }
 }
